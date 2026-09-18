@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+
+# 登录态和本地浏览器缓存，禁止提交
+browser_profile/
+
+# 个人课表、截图、调试输出，禁止提交
+crawl_output/
+
+# 本地编辑器和系统文件
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
