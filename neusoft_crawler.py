@@ -6,7 +6,9 @@
 
 from pathlib import Path
 from datetime import datetime
+import json
 import re
+from urllib.parse import parse_qs, urlsplit
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
 
@@ -16,6 +18,82 @@ START_URL = (
 )
 PROFILE_DIR = Path(__file__).with_name("browser_profile")
 OUTPUT_DIR = Path(__file__).with_name("crawl_output")
+ALLOWED_HOST = "teach.neusoft.edu.cn"
+ALLOWED_PREFIX = "/jwapp/"
+
+
+def sanitize_url(url: str) -> dict:
+    """只保留路由和查询参数名，避免把登录态或个人参数写入报告。"""
+    parts = urlsplit(url)
+    return {
+        "host": parts.netloc,
+        "path": parts.path,
+        "hash": parts.fragment,
+        "query_keys": sorted(parse_qs(parts.query).keys()),
+    }
+
+
+def collect_page_inventory(page, label: str, inventory: list[dict]) -> None:
+    """收集当前页面可见链接、菜单和按钮，不点击未知操作。"""
+    page_data = page.evaluate(
+        """() => {
+            const visible = (el) => {
+                const s = getComputedStyle(el);
+                return s.display !== 'none' && s.visibility !== 'hidden';
+            };
+            const text = (el) => (el.innerText || el.textContent || '')
+                .replace(/\\s+/g, ' ').trim().slice(0, 120);
+            return {
+                links: [...document.querySelectorAll('a[href]')]
+                    .filter(visible)
+                    .map(el => ({text: text(el), href: el.href}))
+                    .filter(x => x.text || x.href),
+                controls: [...document.querySelectorAll(
+                    'button, [role="button"], [role="tab"], [role="menuitem"]'
+                )]
+                    .filter(visible)
+                    .map(el => ({
+                        text: text(el),
+                        tag: el.tagName.toLowerCase(),
+                        role: el.getAttribute('role') || ''
+                    }))
+                    .filter(x => x.text)
+            };
+        }"""
+    )
+    inventory.append({
+        "label": label,
+        "captured_at": datetime.now().isoformat(timespec="seconds"),
+        "page": sanitize_url(page.url),
+        "title": page.title(),
+        "body_text_length": len(page.locator("body").inner_text()),
+        "links": [
+            {"text": item["text"], "url": sanitize_url(item["href"])}
+            for item in page_data["links"]
+            if urlsplit(item["href"]).netloc in ("", ALLOWED_HOST)
+            and (urlsplit(item["href"]).netloc == "" or
+                 urlsplit(item["href"]).path.startswith(ALLOWED_PREFIX))
+        ],
+        "controls": page_data["controls"],
+    })
+
+
+def save_inventory(inventory: list[dict], network_events: list[dict]) -> None:
+    """保存路由/控件和接口访问概览。"""
+    OUTPUT_DIR.mkdir(exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    report = {
+        "scope": {
+            "host": ALLOWED_HOST,
+            "path_prefix": ALLOWED_PREFIX,
+            "mode": "read_only_inventory",
+        },
+        "pages": inventory,
+        "network_requests": network_events,
+    }
+    path = OUTPUT_DIR / f"crawl_report_{stamp}.json"
+    path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"已保存页面和接口信息报告：{path}")
 
 
 def scroll_page_and_panels(page) -> None:
@@ -181,11 +259,12 @@ def download_schedule_docx(page) -> bool:
         return False
 
 
-def crawl_home_modules(page) -> None:
+def crawl_home_modules(page, inventory: list[dict], network_events: list[dict]) -> None:
     """读取主页、我的课程和我的课表等模块。"""
     # 主页上的公告、应用、学习日程、课程卡片等。
     scroll_page_and_panels(page)
     save_page(page, "home")
+    collect_page_inventory(page, "home", inventory)
 
     # “我的课程”通常是主页内的标签，点击后再滚动到底部获取剩余课程。
     if click_tab(page, "我的课程"):
@@ -193,6 +272,7 @@ def crawl_home_modules(page) -> None:
         page.wait_for_timeout(500)
         scroll_page_and_panels(page)
         save_page(page, "my_courses")
+        collect_page_inventory(page, "my_courses", inventory)
     else:
         print("未找到“我的课程”标签，已保留主页内容。")
 
@@ -202,6 +282,7 @@ def crawl_home_modules(page) -> None:
         page.wait_for_timeout(500)
         scroll_page_and_panels(page)
         save_page(page, "my_schedule")
+        collect_page_inventory(page, "my_schedule", inventory)
     else:
         print("未找到“我的课表”标签。")
 
@@ -266,7 +347,24 @@ def main() -> None:
         if not looks_logged_in(page):
             print("未确认登录成功，当前地址：", page.url)
         else:
-            crawl_home_modules(page)
+            inventory: list[dict] = []
+            network_events: list[dict] = []
+
+            def record_request(request) -> None:
+                if request.resource_type not in ("fetch", "xhr"):
+                    return
+                parts = urlsplit(request.url)
+                if parts.netloc != ALLOWED_HOST or not parts.path.startswith(ALLOWED_PREFIX):
+                    return
+                network_events.append({
+                    "method": request.method,
+                    "resource_type": request.resource_type,
+                    "url": sanitize_url(request.url),
+                })
+
+            page.on("request", record_request)
+            crawl_home_modules(page, inventory, network_events)
+            save_inventory(inventory, network_events)
         context.close()
 
 
