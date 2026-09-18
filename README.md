@@ -1,8 +1,8 @@
-# 东软教务课表爬虫
+# 东软教务系统自动 Python 爬虫
 
 当前版本：`v0.1.0`
 
-这是一个基于 Playwright 的东软教务系统课表抓取工具。程序打开可见浏览器，用户通过二维码完成登录后，程序读取首页和课表页面内容，并保存 HTML、TXT 和截图。
+这是一个针对东软教务系统的自动 Python 爬虫，基于 Playwright 实现。程序打开可见浏览器，用户通过二维码完成登录后，程序读取首页和课表页面内容，并保存 HTML、TXT 和截图。
 
 ## 功能
 
@@ -30,7 +30,9 @@ python neusoft_crawler.py
 
 ## 自动选课接口
 
-`course_grab_interface.py` 定义了 `CourseTarget`、`CourseCandidate` 和 `CourseGrabber` 接口，并提供禁止真实提交的 `NotImplementedCourseGrabber` 占位实现。后续开发应在明确的人工确认、频率限制、失败处理和权限边界下进行，当前版本不会自动抢课。
+`course_grab_interface.py` 已为日后的自动抢课功能预留基础接口，定义了 `CourseTarget`、`CourseCandidate` 和 `CourseGrabber`，并提供禁止真实提交的 `NotImplementedCourseGrabber` 占位实现。
+
+由于东软教务系统存在明确的抢课时间限制，且实际抢课规则、开放时间和提交流程仍需进一步确认，目前暂未实现真实的自动抢课功能。当前版本只负责登录、抓取和保存教务信息，不会向教务系统提交选课请求。
 
 ## 安全说明
 
